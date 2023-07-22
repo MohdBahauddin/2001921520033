@@ -1,124 +1,68 @@
-'use strict';
+const express = require("express");
+const axios = require("axios");
 
-var GetIntrinsic = require('get-intrinsic');
-var callBound = require('call-bind/callBound');
-var inspect = require('object-inspect');
+const app = express();
+app.get("/numbers", handleNumRequest);
 
-var $TypeError = GetIntrinsic('%TypeError%');
-var $WeakMap = GetIntrinsic('%WeakMap%', true);
-var $Map = GetIntrinsic('%Map%', true);
+async function handleNumRequest(req, res) {
+  const { url } = req.query;
 
-var $weakMapGet = callBound('WeakMap.prototype.get', true);
-var $weakMapSet = callBound('WeakMap.prototype.set', true);
-var $weakMapHas = callBound('WeakMap.prototype.has', true);
-var $mapGet = callBound('Map.prototype.get', true);
-var $mapSet = callBound('Map.prototype.set', true);
-var $mapHas = callBound('Map.prototype.has', true);
+  if (!url || !Array.isArray(url)) {
+    return res
+      .status(400)
+      .json({ error: "URL parameter is missing or invalid." });
+  }
 
-/*
- * This function traverses the list returning the node corresponding to the
- * given key.
- *
- * That node is also moved to the head of the list, so that if it's accessed
- * again we don't need to traverse the whole list. By doing so, all the recently
- * used nodes can be accessed relatively quickly.
- */
-var listGetNode = function (list, key) { // eslint-disable-line consistent-return
-	for (var prev = list, curr; (curr = prev.next) !== null; prev = curr) {
-		if (curr.key === key) {
-			prev.next = curr.next;
-			curr.next = list.next;
-			list.next = curr; // eslint-disable-line no-param-reassign
-			return curr;
-		}
-	}
-};
+  const validURLs = url.filter(isValidURL);
 
-var listGet = function (objects, key) {
-	var node = listGetNode(objects, key);
-	return node && node.value;
-};
-var listSet = function (objects, key, value) {
-	var node = listGetNode(objects, key);
-	if (node) {
-		node.value = value;
-	} else {
-		// Prepend the new node to the beginning of the list
-		objects.next = { // eslint-disable-line no-param-reassign
-			key: key,
-			next: objects.next,
-			value: value
-		};
-	}
-};
-var listHas = function (objects, key) {
-	return !!listGetNode(objects, key);
-};
+  if (validURLs.length === 0) {
+    return res.status(400).json({ error: "No valid URLs found." });
+  }
 
-module.exports = function getSideChannel() {
-	var $wm;
-	var $m;
-	var $o;
-	var channel = {
-		assert: function (key) {
-			if (!channel.has(key)) {
-				throw new $TypeError('Side channel does not contain ' + inspect(key));
-			}
-		},
-		get: function (key) { // eslint-disable-line consistent-return
-			if ($WeakMap && key && (typeof key === 'object' || typeof key === 'function')) {
-				if ($wm) {
-					return $weakMapGet($wm, key);
-				}
-			} else if ($Map) {
-				if ($m) {
-					return $mapGet($m, key);
-				}
-			} else {
-				if ($o) { // eslint-disable-line no-lonely-if
-					return listGet($o, key);
-				}
-			}
-		},
-		has: function (key) {
-			if ($WeakMap && key && (typeof key === 'object' || typeof key === 'function')) {
-				if ($wm) {
-					return $weakMapHas($wm, key);
-				}
-			} else if ($Map) {
-				if ($m) {
-					return $mapHas($m, key);
-				}
-			} else {
-				if ($o) { // eslint-disable-line no-lonely-if
-					return listHas($o, key);
-				}
-			}
-			return false;
-		},
-		set: function (key, value) {
-			if ($WeakMap && key && (typeof key === 'object' || typeof key === 'function')) {
-				if (!$wm) {
-					$wm = new $WeakMap();
-				}
-				$weakMapSet($wm, key, value);
-			} else if ($Map) {
-				if (!$m) {
-					$m = new $Map();
-				}
-				$mapSet($m, key, value);
-			} else {
-				if (!$o) {
-					/*
-					 * Initialize the linked list as an empty node, so that we don't have
-					 * to special-case handling of the first node: we can always refer to
-					 * it as (previous node).next, instead of something like (list).head
-					 */
-					$o = { key: {}, next: null };
-				}
-				listSet($o, key, value);
-			}
-		}
-	};
-	return channel;
-};
+  try {
+    const responses = await fetchNumFromURLs(validURLs);
+
+    const mergedNumbers = mergeAndSortNum(responses);
+
+    res.json({ numbers: mergedNumbers });
+  } catch (error) {
+    console.error("Error fetching data:", error);
+    res.status(500).json({ error: "An error occurred while fetching data." });
+  }
+}
+
+function isValidURL(url) {
+  try {
+    new URL(url);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+async function fetchNumFromURLs(urls) {
+  const responsePromises = urls.map((validURL) => axios.get(validURL));
+
+  const responses = await Promise.allSettled(
+    responsePromises.map((promise) =>
+      promise.then((result) => result.data.numbers).catch(() => null)
+    )
+  );
+
+  return responses
+    .filter(
+      (response) => response.status === "fulfilled" && response.value !== null
+    )
+    .map((response) => response.value)
+    .flat();
+}
+
+function mergeAndSortNum(arrays) {
+  const merged = [].concat(...arrays);
+  const uniqueSortedNum = Array.from(new Set(merged)).sort((a, b) => a - b);
+  return uniqueSortedNum;
+}
+
+app.listen(8008, () => {
+  console.log(`Server is running on 8008`);
+});
